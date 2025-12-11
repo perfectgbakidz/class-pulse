@@ -6,4 +6,12 @@ pydantic-settings==2.5.2
 passlib[bcrypt]==1.7.4
 PyJWT==2.8.0
 python-multipart==0.0.9
+email-validatorfastapi==0.115.0
+uvicorn==0.30.0
+SQLAlchemy==2.0.36
+pydantic==2.9.2
+pydantic-settings==2.5.2
+passlib[argon2]==1.7.4
+PyJWT==2.8.0
+python-multipart==0.0.9
 email-validator
