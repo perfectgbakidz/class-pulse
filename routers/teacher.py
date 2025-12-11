@@ -91,11 +91,12 @@ def create_poll(
 
     poll = Poll(class_id=payload.class_id, question=payload.question, status="draft")
     db.add(poll)
-    db.flush()
+    db.flush()  # ensure poll.id exists
 
     for opt in payload.options:
         option = PollOption(poll_id=poll.id, option_text=opt.option_text)
         db.add(option)
+        db.flush()  # ensure option is saved
 
     db.commit()
     db.refresh(poll)
@@ -195,22 +196,26 @@ def create_quiz(
 
     quiz = Quiz(class_id=payload.class_id, title=payload.title, timer=payload.timer, status="draft")
     db.add(quiz)
-    db.flush()
+    db.flush()   # make sure quiz.id exists
 
     for q in payload.questions:
         question = QuizQuestion(quiz_id=quiz.id, question_text=q.question_text)
         db.add(question)
-        db.flush()
+        db.flush()  # ensure question.id exists
 
-        option_ids: list[int] = []
+        option_ids = []
         for opt in q.options:
             option = QuizOption(question_id=question.id, option_text=opt.option_text)
             db.add(option)
-            db.flush()
+            db.flush()  # ensure option.id exists
             option_ids.append(option.id)
 
+        # Save correct answer
         if 0 <= q.correct_option_index < len(option_ids):
             question.correct_option_id = option_ids[q.correct_option_index]
+            db.add(question)
+
+        db.flush()
 
     db.commit()
     db.refresh(quiz)
@@ -275,25 +280,51 @@ def quiz_results(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quiz not found")
 
     questions = db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id).all()
-    student_ids = [sid[0] for sid in db.query(QuizResponse.student_id).filter(QuizResponse.quiz_id == quiz_id).distinct().all()]
+    student_ids = [
+        sid[0]
+        for sid in db.query(QuizResponse.student_id)
+        .filter(QuizResponse.quiz_id == quiz_id)
+        .distinct()
+        .all()
+    ]
 
     results = []
     for sid in student_ids:
         correct = 0
         total = len(questions)
         details = []
+
         for question in questions:
             response = (
                 db.query(QuizResponse)
-                .filter(QuizResponse.quiz_id == quiz_id, QuizResponse.question_id == question.id, QuizResponse.student_id == sid)
+                .filter(
+                    QuizResponse.quiz_id == quiz_id,
+                    QuizResponse.question_id == question.id,
+                    QuizResponse.student_id == sid,
+                )
                 .first()
             )
-            is_correct = response is not None and question.correct_option_id is not None and response.option_id == question.correct_option_id
+            is_correct = (
+                response is not None
+                and question.correct_option_id is not None
+                and response.option_id == question.correct_option_id
+            )
+
             if is_correct:
                 correct += 1
+
             details.append({"question_id": question.id, "correct": is_correct})
 
         percentage = (correct / total * 100) if total > 0 else 0.0
-        results.append({"student_id": sid, "score": correct, "total": total, "percentage": percentage, "details": details})
+
+        results.append(
+            {
+                "student_id": sid,
+                "score": correct,
+                "total": total,
+                "percentage": percentage,
+                "details": details,
+            }
+        )
 
     return {"status": "success", "data": results}
