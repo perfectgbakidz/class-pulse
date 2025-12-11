@@ -1,7 +1,7 @@
-fastapi==0.95.2
-uvicorn==0.22.0
+fastapi
+uvicorn
 SQLAlchemy==2.0.25
-pydantic==1.10.11
+pydantic
 passlib[bcrypt]==1.7.4
-PyJWT==2.8.0
-python-multipart==0.0.6
+PyJWT
+python-multipart
