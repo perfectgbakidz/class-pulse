@@ -26,14 +26,15 @@ def get_my_classes(student: User = Depends(require_student), db: Session = Depen
             if cls:
                 class_list.append({
                     "class_id": cls.id,
-                    "class_name": cls.class_name,
-                    "subject": cls.subject,
+                    "class_name": cls.class_name,       # ✅ FIXED
                     "teacher_id": cls.teacher_id,
+                    "teacher_name": cls.teacher.full_name if cls.teacher else None,  # optional improvement
+                    "join_code": cls.join_code
                 })
 
         return {"status": "success", "data": class_list}
+
     except Exception as e:
-        # Log full traceback
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Internal server error")
