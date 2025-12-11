@@ -85,3 +85,31 @@ class QuizAnswer(BaseModel):
 
 class QuizSubmitPayload(BaseModel):
     answers: List[QuizAnswer]
+
+# -------------------- Quiz Response Schemas --------------------
+
+class QuizOut(BaseModel):
+    quiz_id: int
+    class_id: int
+    title: str
+    timer: Optional[int]
+    status: str
+    created_at: Optional[datetime]
+    question_count: int
+
+    class Config:
+        orm_mode = True
+
+
+# -------------------- Poll Response Schemas --------------------
+
+class PollOut(BaseModel):
+    poll_id: int
+    class_id: int
+    question: str
+    status: str
+    option_count: int
+    created_at: Optional[datetime]
+
+    class Config:
+        orm_mode = True
