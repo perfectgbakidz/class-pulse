@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 import string
 import random
 
@@ -25,7 +26,9 @@ def generate_join_code(length: int = 6) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
 
-# -------------------- Classes --------------------
+# --------------------------------------------------
+#                     CLASSES
+# --------------------------------------------------
 
 @router.post("/classes")
 def create_class(
@@ -34,7 +37,7 @@ def create_class(
     db: Session = Depends(get_db),
 ):
     code = generate_join_code()
-    while db.query(Class).filter(Class.join_code == code).first() is not None:
+    while db.query(Class).filter(Class.join_code == code).first():
         code = generate_join_code()
 
     new_class = Class(
@@ -69,7 +72,9 @@ def list_classes(
     }
 
 
-# -------------------- Polls --------------------
+# --------------------------------------------------
+#                     POLLS
+# --------------------------------------------------
 
 @router.post("/polls")
 def create_poll(
@@ -83,20 +88,18 @@ def create_poll(
         .first()
     )
 
-    if cls is None:
+    if not cls:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
+            status_code=404,
             detail="Class not found or not owned by you",
         )
 
     poll = Poll(class_id=payload.class_id, question=payload.question, status="draft")
     db.add(poll)
-    db.flush()  # ensure poll.id exists
+    db.flush()
 
     for opt in payload.options:
-        option = PollOption(poll_id=poll.id, option_text=opt.option_text)
-        db.add(option)
-        db.flush()  # ensure option is saved
+        db.add(PollOption(poll_id=poll.id, option_text=opt.option_text))
 
     db.commit()
     db.refresh(poll)
@@ -109,11 +112,28 @@ def list_polls(
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    polls = db.query(Poll).join(Class).filter(Class.teacher_id == teacher.id).all()
+    polls = (
+        db.query(
+            Poll,
+            func.count(PollOption.id).label("option_count"),
+        )
+        .join(Class, Poll.class_id == Class.id)
+        .outerjoin(PollOption, PollOption.poll_id == Poll.id)
+        .filter(Class.teacher_id == teacher.id)
+        .group_by(Poll.id)
+        .all()
+    )
+
     return {
         "status": "success",
         "data": [
-            {"id": p.id, "question": p.question, "class_id": p.class_id, "status": p.status}
+            {
+                "id": p.Poll.id,
+                "question": p.Poll.question,
+                "class_id": p.Poll.class_id,
+                "status": p.Poll.status,
+                "option_count": p.option_count,
+            }
             for p in polls
         ],
     }
@@ -133,11 +153,11 @@ def set_poll_status(
         .first()
     )
 
-    if poll is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Poll not found")
+    if not poll:
+        raise HTTPException(404, "Poll not found")
 
     if new_status not in ("draft", "live", "closed"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
+        raise HTTPException(400, "Invalid status")
 
     poll.status = new_status
     db.commit()
@@ -157,8 +177,8 @@ def poll_results(
         .first()
     )
 
-    if poll is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Poll not found")
+    if not poll:
+        raise HTTPException(404, "Poll not found")
 
     options = db.query(PollOption).filter(PollOption.poll_id == poll_id).all()
     total_votes = db.query(PollResponse).filter(PollResponse.poll_id == poll_id).count()
@@ -166,15 +186,22 @@ def poll_results(
     results = []
     for option in options:
         votes = db.query(PollResponse).filter(PollResponse.option_id == option.id).count()
-        percentage = (votes / total_votes * 100) if total_votes > 0 else 0.0
+        percentage = (votes / total_votes * 100) if total_votes else 0
         results.append(
-            {"option_id": option.id, "option_text": option.option_text, "votes": votes, "percentage": percentage}
+            {
+                "option_id": option.id,
+                "option_text": option.option_text,
+                "votes": votes,
+                "percentage": percentage,
+            }
         )
 
     return {"status": "success", "data": {"total_votes": total_votes, "results": results}}
 
 
-# -------------------- Quizzes --------------------
+# --------------------------------------------------
+#                     QUIZZES
+# --------------------------------------------------
 
 @router.post("/quizzes")
 def create_quiz(
@@ -188,34 +215,33 @@ def create_quiz(
         .first()
     )
 
-    if cls is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Class not found or not owned by you",
-        )
+    if not cls:
+        raise HTTPException(404, "Class not found or not owned by you")
 
-    quiz = Quiz(class_id=payload.class_id, title=payload.title, timer=payload.timer, status="draft")
+    quiz = Quiz(
+        class_id=payload.class_id,
+        title=payload.title,
+        timer=payload.timer,
+        status="draft",
+    )
     db.add(quiz)
-    db.flush()   # make sure quiz.id exists
+    db.flush()
 
     for q in payload.questions:
         question = QuizQuestion(quiz_id=quiz.id, question_text=q.question_text)
         db.add(question)
-        db.flush()  # ensure question.id exists
+        db.flush()
 
         option_ids = []
         for opt in q.options:
             option = QuizOption(question_id=question.id, option_text=opt.option_text)
             db.add(option)
-            db.flush()  # ensure option.id exists
+            db.flush()
             option_ids.append(option.id)
 
-        # Save correct answer
         if 0 <= q.correct_option_index < len(option_ids):
             question.correct_option_id = option_ids[q.correct_option_index]
             db.add(question)
-
-        db.flush()
 
     db.commit()
     db.refresh(quiz)
@@ -228,11 +254,29 @@ def list_quizzes(
     teacher: User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    quizzes = db.query(Quiz).join(Class).filter(Class.teacher_id == teacher.id).all()
+    quizzes = (
+        db.query(
+            Quiz,
+            func.count(QuizQuestion.id).label("question_count"),
+        )
+        .join(Class, Quiz.class_id == Class.id)
+        .outerjoin(QuizQuestion, QuizQuestion.quiz_id == Quiz.id)
+        .filter(Class.teacher_id == teacher.id)
+        .group_by(Quiz.id)
+        .all()
+    )
+
     return {
         "status": "success",
         "data": [
-            {"id": q.id, "title": q.title, "class_id": q.class_id, "status": q.status, "timer": q.timer}
+            {
+                "id": q.Quiz.id,
+                "title": q.Quiz.title,
+                "class_id": q.Quiz.class_id,
+                "status": q.Quiz.status,
+                "timer": q.Quiz.timer,
+                "question_count": q.question_count,
+            }
             for q in quizzes
         ],
     }
@@ -252,11 +296,11 @@ def set_quiz_status(
         .first()
     )
 
-    if quiz is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quiz not found")
+    if not quiz:
+        raise HTTPException(404, "Quiz not found")
 
     if new_status not in ("draft", "live", "closed"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid status")
+        raise HTTPException(400, "Invalid status")
 
     quiz.status = new_status
     db.commit()
@@ -276,19 +320,21 @@ def quiz_results(
         .first()
     )
 
-    if quiz is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quiz not found")
+    if not quiz:
+        raise HTTPException(404, "Quiz not found")
 
     questions = db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id).all()
+
     student_ids = [
-        sid[0]
-        for sid in db.query(QuizResponse.student_id)
+        s[0]
+        for s in db.query(QuizResponse.student_id)
         .filter(QuizResponse.quiz_id == quiz_id)
         .distinct()
         .all()
     ]
 
     results = []
+
     for sid in student_ids:
         correct = 0
         total = len(questions)
@@ -304,6 +350,7 @@ def quiz_results(
                 )
                 .first()
             )
+
             is_correct = (
                 response is not None
                 and question.correct_option_id is not None
@@ -315,7 +362,7 @@ def quiz_results(
 
             details.append({"question_id": question.id, "correct": is_correct})
 
-        percentage = (correct / total * 100) if total > 0 else 0.0
+        percentage = (correct / total * 100) if total else 0
 
         results.append(
             {

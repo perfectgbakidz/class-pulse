@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from database import get_db
 from deps import require_student
@@ -17,52 +18,61 @@ def get_my_classes(student: User = Depends(require_student), db: Session = Depen
     if not student or not getattr(student, "id", None):
         raise HTTPException(status_code=400, detail="Invalid student credentials")
 
-    try:
-        memberships = db.query(ClassMember).filter(ClassMember.student_id == student.id).all()
-        class_list = []
+    memberships = db.query(ClassMember).filter(ClassMember.student_id == student.id).all()
+    class_list = []
 
-        for m in memberships:
-            cls = db.query(Class).filter(Class.id == m.class_id).first()
-            if cls:
-                class_list.append({
-                    "class_id": cls.id,
-                    "class_name": cls.class_name,       # ✅ FIXED
-                    "teacher_id": cls.teacher_id,
-                    "teacher_name": cls.teacher.full_name if cls.teacher else None,  # optional improvement
-                    "join_code": cls.join_code
-                })
+    for m in memberships:
+        cls = db.query(Class).filter(Class.id == m.class_id).first()
+        if cls:
+            class_list.append({
+                "class_id": cls.id,
+                "class_name": cls.class_name,
+                "teacher_id": cls.teacher_id,
+                "teacher_name": cls.teacher.full_name if cls.teacher else None,
+                "join_code": cls.join_code
+            })
 
-        return {"status": "success", "data": class_list}
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail="Internal server error")
+    return {"status": "success", "data": class_list}
 
 
-
+# -----------------------------------------------------------
+#                     List My Quizzes
+# -----------------------------------------------------------
 @router.get("/quizzes")
 def get_my_quizzes(student: User = Depends(require_student), db: Session = Depends(get_db)):
-    """
-    Get all quizzes for the classes that the student is enrolled in.
-    """
-    # Find all classes the student is a member of
+
     memberships = db.query(ClassMember).filter(ClassMember.student_id == student.id).all()
     class_ids = [m.class_id for m in memberships]
 
-    # Get all quizzes in those classes
-    quizzes = db.query(Quiz).filter(Quiz.class_id.in_(class_ids)).all()
+    # Include question count
+    quizzes = (
+        db.query(
+            Quiz.id.label("quiz_id"),
+            Quiz.class_id,
+            Quiz.title,
+            Quiz.timer,
+            Quiz.status,
+            Quiz.created_at,
+            func.count(QuizQuestion.id).label("question_count")
+        )
+        .outerjoin(QuizQuestion, QuizQuestion.quiz_id == Quiz.id)
+        .filter(Quiz.class_id.in_(class_ids))
+        .group_by(Quiz.id)
+        .all()
+    )
 
-    quiz_list = []
-    for quiz in quizzes:
-        quiz_list.append({
-            "quiz_id": quiz.id,
-            "class_id": quiz.class_id,
-            "title": quiz.title,
-            "timer": quiz.timer,
-            "status": quiz.status,
-            "created_at": quiz.created_at
-        })
+    quiz_list = [
+        {
+            "quiz_id": q.quiz_id,
+            "class_id": q.class_id,
+            "title": q.title,
+            "timer": q.timer,
+            "status": q.status,
+            "created_at": q.created_at,
+            "question_count": q.question_count
+        }
+        for q in quizzes
+    ]
 
     return {"status": "success", "data": quiz_list}
 
@@ -78,21 +88,15 @@ def join_class(
 ):
     cls = db.query(Class).filter(Class.join_code == payload.join_code).first()
     if cls is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Class not found",
-        )
+        raise HTTPException(status_code=404, detail="Class not found")
 
-    membership = (
-        db.query(ClassMember)
-        .filter(ClassMember.class_id == cls.id, ClassMember.student_id == student.id)
-        .first()
-    )
+    membership = db.query(ClassMember).filter(
+        ClassMember.class_id == cls.id,
+        ClassMember.student_id == student.id,
+    ).first()
+
     if membership:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Already a member of this class",
-        )
+        raise HTTPException(status_code=409, detail="Already a member of this class")
 
     new_member = ClassMember(class_id=cls.id, student_id=student.id)
     db.add(new_member)
@@ -116,24 +120,25 @@ def submit_quiz(
     student: User = Depends(require_student),
     db: Session = Depends(get_db),
 ):
-    quiz: Quiz | None = db.query(Quiz).filter(Quiz.id == quiz_id).first()
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
     if quiz is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quiz not available")
+        raise HTTPException(status_code=404, detail="Quiz not available")
 
     membership = db.query(ClassMember).filter(
         ClassMember.class_id == quiz.class_id,
-        ClassMember.student_id == student.id
+        ClassMember.student_id == student.id,
     ).first()
     if membership is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this class")
+        raise HTTPException(status_code=403, detail="Not a member of this class")
 
     existing = db.query(QuizResponse).filter(
         QuizResponse.quiz_id == quiz_id,
         QuizResponse.student_id == student.id
     ).first()
     if existing:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Quiz already submitted")
+        raise HTTPException(status_code=409, detail="Quiz already submitted")
 
+    # Save responses
     for ans in payload.answers:
         response = QuizResponse(
             quiz_id=quiz_id,
@@ -145,10 +150,10 @@ def submit_quiz(
 
     db.commit()
 
-    # Calculate score
+    # Calculate results
     questions = db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id).all()
     correct = 0
-    details: list[dict] = []
+    details = []
 
     for question in questions:
         response = db.query(QuizResponse).filter(
@@ -156,9 +161,11 @@ def submit_quiz(
             QuizResponse.question_id == question.id,
             QuizResponse.student_id == student.id
         ).first()
+
         is_correct = response is not None and response.option_id == question.correct_option_id
         if is_correct:
             correct += 1
+
         details.append({"question_id": question.id, "correct": is_correct})
 
     total = len(questions)
@@ -176,7 +183,7 @@ def submit_quiz(
 
 
 # -----------------------------------------------------------
-#                   Quiz Result
+#                   Quiz Result (My Result)
 # -----------------------------------------------------------
 @router.get("/quizzes/{quiz_id}/results")
 def my_quiz_result(
@@ -184,20 +191,20 @@ def my_quiz_result(
     student: User = Depends(require_student),
     db: Session = Depends(get_db),
 ):
-    quiz: Quiz | None = db.query(Quiz).filter(Quiz.id == quiz_id).first()
+    quiz = db.query(Quiz).filter(Quiz.id == quiz_id).first()
     if quiz is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quiz not found")
+        raise HTTPException(status_code=404, detail="Quiz not found")
 
     membership = db.query(ClassMember).filter(
         ClassMember.class_id == quiz.class_id,
-        ClassMember.student_id == student.id
+        ClassMember.student_id == student.id,
     ).first()
     if membership is None:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not a member of this class")
+        raise HTTPException(status_code=403, detail="Not a member of this class")
 
     questions = db.query(QuizQuestion).filter(QuizQuestion.quiz_id == quiz_id).all()
     correct = 0
-    details: list[dict] = []
+    details = []
 
     for question in questions:
         response = db.query(QuizResponse).filter(
@@ -205,9 +212,12 @@ def my_quiz_result(
             QuizResponse.question_id == question.id,
             QuizResponse.student_id == student.id
         ).first()
+
         is_correct = response is not None and response.option_id == question.correct_option_id
+
         if is_correct:
             correct += 1
+
         details.append({"question_id": question.id, "correct": is_correct})
 
     total = len(questions)
