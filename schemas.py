@@ -9,7 +9,12 @@ class UserCreate(BaseModel):
     full_name: Optional[str] = None
     email: EmailStr
     password: str
-    role: Literal["teacher", "student"]  # ✅ FIXED (no regex)
+    role: Literal["teacher", "student"]  # teacher OR student ONLY
+
+
+class LoginSchema(BaseModel):
+    email: EmailStr
+    password: str
 
 
 class Token(BaseModel):
