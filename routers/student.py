@@ -9,7 +9,40 @@ from schemas import QuizSubmitPayload, JoinClass
 router = APIRouter(prefix="/student", tags=["Student"])
 
 
-# -------------------- Join Class --------------------
+# -----------------------------------------------------------
+#                     Get My Classes
+# -----------------------------------------------------------
+@router.get("/classes")
+def get_my_classes(
+    student: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    memberships = (
+        db.query(ClassMember)
+        .filter(ClassMember.student_id == student.id)
+        .all()
+    )
+
+    class_list = []
+    for m in memberships:
+        cls = db.query(Class).filter(Class.id == m.class_id).first()
+        if cls:
+            class_list.append({
+                "class_id": cls.id,
+                "class_name": cls.class_name,
+                "subject": cls.subject,
+                "teacher_id": cls.teacher_id,
+            })
+
+    return {
+        "status": "success",
+        "data": class_list,
+    }
+
+
+# -----------------------------------------------------------
+#                       Join Class
+# -----------------------------------------------------------
 @router.post("/classes/join")
 def join_class(
     payload: JoinClass,
@@ -46,7 +79,9 @@ def join_class(
     }
 
 
-# -------------------- Submit Quiz --------------------
+# -----------------------------------------------------------
+#                    Submit Quiz
+# -----------------------------------------------------------
 @router.post("/quizzes/{quiz_id}/submit")
 def submit_quiz(
     quiz_id: int,
@@ -100,7 +135,7 @@ def submit_quiz(
         details.append({"question_id": question.id, "correct": is_correct})
 
     total = len(questions)
-    percentage = (correct / total * 100) if total > 0 else 0.0
+    percentage = (correct / total * 100) if total > 0 else 0
 
     return {
         "status": "success",
@@ -113,7 +148,9 @@ def submit_quiz(
     }
 
 
-# -------------------- My Quiz Result --------------------
+# -----------------------------------------------------------
+#                   Quiz Result
+# -----------------------------------------------------------
 @router.get("/quizzes/{quiz_id}/results")
 def my_quiz_result(
     quiz_id: int,
@@ -147,7 +184,7 @@ def my_quiz_result(
         details.append({"question_id": question.id, "correct": is_correct})
 
     total = len(questions)
-    percentage = (correct / total * 100) if total > 0 else 0.0
+    percentage = (correct / total * 100) if total > 0 else 0
 
     return {
         "status": "success",
