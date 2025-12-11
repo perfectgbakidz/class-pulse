@@ -13,32 +13,30 @@ router = APIRouter(prefix="/student", tags=["Student"])
 #                     Get My Classes
 # -----------------------------------------------------------
 @router.get("/classes")
-def get_my_classes(
-    student: User = Depends(require_student),
-    db: Session = Depends(get_db),
-):
-    memberships = (
-        db.query(ClassMember)
-        .filter(ClassMember.student_id == student.id)
-        .all()
-    )
+def get_my_classes(student: User = Depends(require_student), db: Session = Depends(get_db)):
+    if not student or not getattr(student, "id", None):
+        raise HTTPException(status_code=400, detail="Invalid student credentials")
 
-    class_list = []
-    for m in memberships:
-        cls = db.query(Class).filter(Class.id == m.class_id).first()
-        if cls:
-            class_list.append({
-                "class_id": cls.id,
-                "class_name": cls.class_name,
-                "subject": cls.subject,
-                "teacher_id": cls.teacher_id,
-            })
+    try:
+        memberships = db.query(ClassMember).filter(ClassMember.student_id == student.id).all()
+        class_list = []
 
-    return {
-        "status": "success",
-        "data": class_list,
-    }
+        for m in memberships:
+            cls = db.query(Class).filter(Class.id == m.class_id).first()
+            if cls:
+                class_list.append({
+                    "class_id": cls.id,
+                    "class_name": cls.class_name,
+                    "subject": cls.subject,
+                    "teacher_id": cls.teacher_id,
+                })
 
+        return {"status": "success", "data": class_list}
+    except Exception as e:
+        # Log full traceback
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # -----------------------------------------------------------
 #                       Join Class
