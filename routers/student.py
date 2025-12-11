@@ -39,6 +39,34 @@ def get_my_classes(student: User = Depends(require_student), db: Session = Depen
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Internal server error")
 
+
+
+@router.get("/quizzes")
+def get_my_quizzes(student: User = Depends(require_student), db: Session = Depends(get_db)):
+    """
+    Get all quizzes for the classes that the student is enrolled in.
+    """
+    # Find all classes the student is a member of
+    memberships = db.query(ClassMember).filter(ClassMember.student_id == student.id).all()
+    class_ids = [m.class_id for m in memberships]
+
+    # Get all quizzes in those classes
+    quizzes = db.query(Quiz).filter(Quiz.class_id.in_(class_ids)).all()
+
+    quiz_list = []
+    for quiz in quizzes:
+        quiz_list.append({
+            "quiz_id": quiz.id,
+            "class_id": quiz.class_id,
+            "title": quiz.title,
+            "timer": quiz.timer,
+            "status": quiz.status,
+            "created_at": quiz.created_at
+        })
+
+    return {"status": "success", "data": quiz_list}
+
+
 # -----------------------------------------------------------
 #                       Join Class
 # -----------------------------------------------------------
